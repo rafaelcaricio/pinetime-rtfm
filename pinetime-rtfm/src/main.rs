@@ -146,24 +146,30 @@ const APP: () = {
 
         let mut screen = ui.scr_act();
         // Set black background screen
-        // let mut screen_style = lvgl::Style::new();
-        // screen_style.set_body_main_color(lvgl::Color::from_rgb((0, 0, 0)));
-        // screen_style.set_body_grad_color(lvgl::Color::from_rgb((0, 0, 0)));
-        // screen.set_style(screen_style);
+        let mut screen_style = lvgl::Style::new();
+        screen_style.set_body_main_color(Color::from_rgb((0, 0, 0)));
+        screen_style.set_body_grad_color(Color::from_rgb((0, 0, 0)));
+        screen_style.set_body_radius(0);
+        screen_style.set_body_border_color(Color::from_rgb((0, 0, 0)));
+        screen.set_style(screen_style);
 
-        let mut label = Label::new(&mut screen);
-        let mut top_lbl_style = lvgl::Style::new();
-        top_lbl_style.set_text_color(Color::from_rgb((200, 0, 0)));
-        label.set_style(top_lbl_style);
-        label.set_text("It works!!1");
-        label.set_align(&mut screen, Align::InTopMid, 0, 0);
+        {
+            let mut label = Label::new(&mut screen);
+            let mut top_lbl_style = lvgl::Style::new();
+            top_lbl_style.set_text_color(Color::from_rgb((200, 0, 0)));
+            label.set_style(top_lbl_style);
+            label.set_text("It works!!1");
+            label.set_align(&mut screen, Align::InTopMid, 0, 0);
+        };
 
-        let mut button = Button::new(&mut screen);
-        button.set_size(220, 80);
+        {
+            let mut button = Button::new(&mut screen);
+            button.set_size(220, 80);
 
-        let mut label = Label::new(&mut button);
-        label.set_text("Open");
-        button.set_align(&mut screen, lvgl::Align::Center, 0, 0);
+            let mut label = Label::new(&mut button);
+            label.set_text("Open");
+            button.set_align(&mut screen, lvgl::Align::Center, 0, 0);
+        };
 
         for _ in 0..100 {
             ui.tick_inc(Duration::from_millis(5));
