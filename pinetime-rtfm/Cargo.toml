@@ -14,6 +14,8 @@ numtoa = "0.2"
 panic-semihosting = "0.5"
 rtt-target = { version = "0.1", features = ["cortex-m"] }
 st7789 = { version = "0.2", features = ["graphics", "batch", "buffer"], default-features = false }
+alloc-cortex-m = { git = "https://github.com/rust-embedded/alloc-cortex-m.git" }
+lvgl = { path = "../../lvgl-rs/lvgl" }
 
 [dependencies.nrf52832-hal]
 git = "https://github.com/nrf-rs/nrf52-hal/"

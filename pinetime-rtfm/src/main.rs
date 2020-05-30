@@ -1,9 +1,18 @@
 #![no_main]
 #![no_std]
+#![feature(alloc_error_handler)]
+
+#[macro_use]
+extern crate alloc;
 
 #[allow(unused_imports)]
 use panic_semihosting;
 
+use alloc::vec::Vec;
+use alloc_cortex_m::CortexMHeap;
+use core::alloc::Layout;
+use core::time::Duration;
+use cortex_m::asm;
 use embedded_graphics::prelude::*;
 use embedded_graphics::{
     fonts::{Font12x16, Text},
@@ -12,6 +21,7 @@ use embedded_graphics::{
     primitives::rectangle::Rectangle,
     style::{PrimitiveStyleBuilder, TextStyleBuilder},
 };
+use lvgl::{Align, Button, Color, DisplayDriver, Label, Object, UI};
 use nrf52832_hal::gpio::{p0, Level, Output, PushPull};
 use nrf52832_hal::prelude::*;
 use nrf52832_hal::{self as hal, pac};
@@ -23,6 +33,11 @@ use st7789::{self, Orientation};
 
 mod delay;
 
+#[global_allocator]
+static ALLOCATOR: CortexMHeap = CortexMHeap::empty();
+
+const HEAP_SIZE: usize = 1024; // in bytes
+
 const LCD_W: u16 = 240;
 const LCD_H: u16 = 240;
 
@@ -32,37 +47,18 @@ const FERRIS_Y_OFFSET: u16 = 80;
 
 const MARGIN: u16 = 10;
 
-const BACKGROUND_COLOR: Rgb565 = Rgb565::new(0, 0b000111, 0);
+const BACKGROUND_COLOR: Rgb565 = Rgb565::new(200, 0, 150);
 
 const CLOCK_FREQUENCY: u32 = 64_000_000;
 
 #[app(device = nrf52832_hal::pac, peripherals = true, monotonic = rtfm::cyccnt::CYCCNT)]
 const APP: () = {
     struct Resources {
-        // LCD
-        lcd: st7789::ST7789<
-            hal::spim::Spim<pac::SPIM1>,
-            p0::P0_18<Output<PushPull>>,
-            p0::P0_26<Output<PushPull>>,
-            delay::TimerDelay,
-        >,
-
-        // Styles
-        text_style: TextStyleBuilder<Rgb565, Font12x16>,
-
-        // Counter resources
-        #[init(0)]
-        counter: usize,
-
-        // Ferris resources
-        ferris: ImageRawLE<'static, Rgb565>,
-        #[init(10)]
-        ferris_x_offset: i32,
-        #[init(2)]
-        ferris_step_size: i32,
+        // LittlevGL Graphical Interface
+        ui: lvgl::UI,
     }
 
-    #[init(spawn = [write_counter, write_ferris])]
+    #[init()]
     fn init(cx: init::Context) -> init::LateResources {
         let _p = cx.core;
         let dp = cx.device;
@@ -122,6 +118,9 @@ const APP: () = {
         // commands.
         lcd_cs.set_low().unwrap();
 
+        // Initialize the allocator
+        unsafe { ALLOCATOR.init(cortex_m_rt::heap_start() as usize, HEAP_SIZE) }
+
         // Initialize LCD
         let mut lcd = st7789::ST7789::new(spi, lcd_dc, lcd_rst, LCD_W, LCD_H, delay);
         lcd.init().unwrap();
@@ -136,112 +135,47 @@ const APP: () = {
             .draw(&mut lcd)
             .unwrap();
 
-        // Choose text style
         let text_style = TextStyleBuilder::new(Font12x16)
             .text_color(Rgb565::WHITE)
             .background_color(BACKGROUND_COLOR);
 
-        // Draw text
-        Text::new("Hello world!", Point::new(10, 10))
-            .into_styled(text_style.build())
-            .draw(&mut lcd)
-            .unwrap();
+        let mut ui = UI::init().unwrap();
 
-        // Load ferris image data
-        let ferris = ImageRawLE::new(
-            include_bytes!("../ferris.raw"),
-            FERRIS_W as u32,
-            FERRIS_H as u32,
-        );
+        let display_driver = DisplayDriver::new(&mut lcd);
+        ui.disp_drv_register(display_driver);
 
-        // Schedule tasks immediately
-        cx.spawn.write_counter().unwrap();
-        cx.spawn.write_ferris().unwrap();
+        let mut screen = ui.scr_act();
+        // Set black background screen
+        // let mut screen_style = lvgl::Style::new();
+        // screen_style.set_body_main_color(lvgl::Color::from_rgb((0, 0, 0)));
+        // screen_style.set_body_grad_color(lvgl::Color::from_rgb((0, 0, 0)));
+        // screen.set_style(screen_style);
 
-        init::LateResources {
-            lcd,
-            text_style,
-            ferris,
+        let mut label = Label::new(&mut screen);
+        let mut top_lbl_style = lvgl::Style::new();
+        top_lbl_style.set_text_color(Color::from_rgb((200, 0, 0)));
+        label.set_style(top_lbl_style);
+        label.set_text("It works!!1");
+        label.set_align(&mut screen, Align::InTopMid, 0, 0);
+
+        let mut button = Button::new(&mut screen);
+        button.set_size(220, 80);
+
+        let mut label = Label::new(&mut button);
+        label.set_text("Open");
+        button.set_align(&mut screen, lvgl::Align::Center, 0, 0);
+
+        for _ in 0..100 {
+            ui.tick_inc(Duration::from_millis(5));
+            ui.task_handler();
         }
-    }
+        //
+        // Text::new("Updated!", Point::new(10, 50))
+        //     .into_styled(text_style.build())
+        //     .draw(&mut lcd)
+        //     .unwrap();
 
-    #[task(resources = [lcd, ferris, ferris_x_offset, ferris_step_size], schedule = [write_ferris])]
-    fn write_ferris(cx: write_ferris::Context) {
-        // Draw ferris
-        Image::new(
-            &cx.resources.ferris,
-            Point::new(*cx.resources.ferris_x_offset, FERRIS_Y_OFFSET as i32),
-        )
-        .draw(cx.resources.lcd)
-        .unwrap();
-
-        // Clean up behind ferris
-        let backdrop_style = PrimitiveStyleBuilder::new()
-            .fill_color(BACKGROUND_COLOR)
-            .build();
-        let (p1, p2) = if *cx.resources.ferris_step_size > 0 {
-            // Clean up to the left
-            (
-                Point::new(
-                    *cx.resources.ferris_x_offset - *cx.resources.ferris_step_size,
-                    FERRIS_Y_OFFSET as i32,
-                ),
-                Point::new(
-                    *cx.resources.ferris_x_offset,
-                    (FERRIS_Y_OFFSET + FERRIS_H) as i32,
-                ),
-            )
-        } else {
-            // Clean up to the right
-            (
-                Point::new(
-                    *cx.resources.ferris_x_offset + FERRIS_W as i32,
-                    FERRIS_Y_OFFSET as i32,
-                ),
-                Point::new(
-                    *cx.resources.ferris_x_offset
-                        + FERRIS_W as i32
-                        - *cx.resources.ferris_step_size,
-                    (FERRIS_Y_OFFSET + FERRIS_H) as i32,
-                ),
-            )
-        };
-        Rectangle::new(p1, p2)
-            .into_styled(backdrop_style)
-            .draw(cx.resources.lcd)
-            .unwrap();
-
-        // Reset step size
-        if *cx.resources.ferris_x_offset as u16 > LCD_W - FERRIS_W - MARGIN {
-            *cx.resources.ferris_step_size = -*cx.resources.ferris_step_size;
-        } else if (*cx.resources.ferris_x_offset as u16) < MARGIN {
-            *cx.resources.ferris_step_size = -*cx.resources.ferris_step_size;
-        }
-        *cx.resources.ferris_x_offset += *cx.resources.ferris_step_size;
-
-        // Re-schedule the timer interrupt
-        cx.schedule
-            .write_ferris(cx.scheduled + (CLOCK_FREQUENCY / 25).cycles())
-            .unwrap();
-    }
-
-    #[task(resources = [lcd, text_style, counter], schedule = [write_counter])]
-    fn write_counter(cx: write_counter::Context) {
-        // Write counter to the display
-        let mut buf = [0u8; 20];
-        let text = cx.resources.counter.numtoa_str(10, &mut buf);
-        Text::new(text, Point::new(10, LCD_H as i32 - 10 - 16))
-            .into_styled(cx.resources.text_style.build())
-            .draw(cx.resources.lcd)
-            .unwrap();
-
-        // Increment counter
-        *cx.resources.counter += 1;
-
-        // Re-schedule the timer interrupt
-        cx.schedule
-            .write_counter(cx.scheduled + CLOCK_FREQUENCY.cycles())
-            .unwrap();
+        init::LateResources { ui }
     }
 
     // Provide unused interrupts to RTFM for its scheduling
@@ -254,3 +188,11 @@ const APP: () = {
         fn SWI5_EGU5();
     }
 };
+
+#[alloc_error_handler]
+fn alloc_error(_layout: Layout) -> ! {
+    asm::bkpt();
+
+    rprintln!("OOM x(");
+    loop {}
+}
