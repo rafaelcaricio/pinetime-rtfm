@@ -1,10 +1,14 @@
 #![no_main]
 #![cfg_attr(not(test), no_std)]
+#![feature(alloc_error_handler)]
 
 // Panic handler
 #[cfg(not(test))]
 use panic_rtt_target as _;
 
+use alloc_cortex_m::CortexMHeap;
+use core::alloc::Layout;
+use cortex_m::asm;
 use debouncr::{debounce_6, Debouncer, Edge, Repeat6};
 use embedded_graphics::prelude::*;
 use embedded_graphics::{
@@ -39,6 +43,11 @@ mod delay;
 mod monotonic_nrf52;
 
 use monotonic_nrf52::U32Ext;
+
+#[global_allocator]
+static ALLOCATOR: CortexMHeap = CortexMHeap::empty();
+
+const HEAP_SIZE: usize = 2 * 1024; // in bytes
 
 const LCD_W: u16 = 240;
 const LCD_H: u16 = 240;
@@ -243,6 +252,9 @@ const APP: () = {
         let mut lcd = st7789::ST7789::new(spi, lcd_dc, lcd_rst, LCD_W, LCD_H, delay);
         lcd.init().unwrap();
         lcd.set_orientation(&Orientation::Portrait).unwrap();
+
+        // Initialize the allocator
+        unsafe { ALLOCATOR.init(cortex_m_rt::heap_start() as usize, HEAP_SIZE) }
 
         // Draw something onto the LCD
         let backdrop_style = PrimitiveStyleBuilder::new()
@@ -504,3 +516,11 @@ const APP: () = {
         fn SWI5_EGU5();
     }
 };
+
+#[alloc_error_handler]
+fn alloc_error(_layout: Layout) -> ! {
+    asm::bkpt();
+
+    rprintln!("OOM x(");
+    loop {}
+}
