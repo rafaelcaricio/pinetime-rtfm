@@ -1,6 +1,9 @@
 #![no_main]
-#![cfg_attr(not(test), no_std)]
+#![no_std]
 #![feature(alloc_error_handler)]
+
+#[macro_use]
+extern crate alloc;
 
 // Panic handler
 #[cfg(not(test))]
@@ -11,6 +14,9 @@ use core::alloc::Layout;
 use cortex_m::asm;
 use debouncr::{debounce_6, Debouncer, Edge, Repeat6};
 use embedded_graphics::prelude::*;
+use lvgl::{DisplayDriver, UI, Align, Widget, Part, State, Color};
+use lvgl::widgets::{Label, LabelAlign};
+use lvgl::style::Style as LvStyle;
 use embedded_graphics::{
     fonts::{Font12x16, Text},
     image::{Image, ImageRawLE},
@@ -87,21 +93,25 @@ const APP: () = {
         button: Pin<Input<Floating>>,
         button_debouncer: Debouncer<u8, Repeat6>,
 
-        // Styles
-        text_style: TextStyleBuilder<Rgb565, Font12x16>,
+        // // Styles
+        // text_style: TextStyleBuilder<Rgb565, Font12x16>,
 
         // Counter resources
         #[init(0)]
         counter: usize,
 
-        // Ferris resources
-        ferris: ImageRawLE<'static, Rgb565>,
-        #[init(10)]
-        ferris_x_offset: i32,
-        #[init(80)]
-        ferris_y_offset: i32,
-        #[init(2)]
-        ferris_step_size: i32,
+        // // Ferris resources
+        // ferris: ImageRawLE<'static, Rgb565>,
+        // #[init(10)]
+        // ferris_x_offset: i32,
+        // #[init(80)]
+        // ferris_y_offset: i32,
+        // #[init(2)]
+        // ferris_step_size: i32,
+
+        // LVGL GUI
+        ui: UI,
+        label: Label,
 
         // BLE
         #[init([0; MIN_PDU_BUF])]
@@ -119,7 +129,8 @@ const APP: () = {
 
     #[init(
         resources = [ble_tx_buf, ble_rx_buf, tx_queue, rx_queue],
-        spawn = [write_counter, write_ferris, poll_button, show_battery_status, update_battery_status],
+        // spawn = [write_counter, write_ferris, poll_button, show_battery_status, update_battery_status],
+        spawn = [write_counter, poll_button, lvgl_tick_inc, lvgl_task_handler],
     )]
     fn init(cx: init::Context) -> init::LateResources {
         // Destructure device peripherals
@@ -256,6 +267,27 @@ const APP: () = {
         // Initialize the allocator
         unsafe { ALLOCATOR.init(cortex_m_rt::heap_start() as usize, HEAP_SIZE) }
 
+        let mut ui = UI::init().unwrap();
+
+        let display_driver = DisplayDriver::new(&mut lcd);
+        ui.disp_drv_register(display_driver);
+
+        let mut scr = ui.scr_act().unwrap();
+        
+        let mut screen_style = LvStyle::default();
+        screen_style.set_bg_color(State::DEFAULT, Color::from_rgb((0, 50, 140)));
+        scr.add_style(Part::Main, screen_style).unwrap();
+
+
+        let mut label = Label::new(&mut scr).unwrap();
+        label.set_text("Initializing...").unwrap();
+        label.set_align(&mut scr, Align::Center, 0, 0).unwrap();
+        label.set_label_align(LabelAlign::Center).unwrap();
+
+        let mut counter_style = LvStyle::default();
+        counter_style.set_text_color(State::DEFAULT, Color::from_rgb((255, 255, 255)));
+        label.add_style(Part::Main, counter_style).unwrap();
+
         // Draw something onto the LCD
         let backdrop_style = PrimitiveStyleBuilder::new()
             .fill_color(BACKGROUND_COLOR)
@@ -265,30 +297,32 @@ const APP: () = {
             .draw(&mut lcd)
             .unwrap();
 
-        // Choose text style
-        let text_style = TextStyleBuilder::new(Font12x16)
-            .text_color(Rgb565::WHITE)
-            .background_color(BACKGROUND_COLOR);
+        // // Choose text style
+        // let text_style = TextStyleBuilder::new(Font12x16)
+        //     .text_color(Rgb565::WHITE)
+        //     .background_color(BACKGROUND_COLOR);
 
-        // Draw text
-        Text::new("PineTime", Point::new(10, 10))
-            .into_styled(text_style.build())
-            .draw(&mut lcd)
-            .unwrap();
+        // // Draw text
+        // Text::new("PineTime", Point::new(10, 10))
+        //     .into_styled(text_style.build())
+        //     .draw(&mut lcd)
+        //     .unwrap();
 
         // Load ferris image data
-        let ferris = ImageRawLE::new(
-            include_bytes!("../ferris.raw"),
-            FERRIS_W as u32,
-            FERRIS_H as u32,
-        );
+        // let ferris = ImageRawLE::new(
+        //     include_bytes!("../ferris.raw"),
+        //     FERRIS_W as u32,
+        //     FERRIS_H as u32,
+        // );
 
         // Schedule tasks immediately
         cx.spawn.write_counter().unwrap();
-        cx.spawn.write_ferris().unwrap();
+        //cx.spawn.write_ferris().unwrap();
+        cx.spawn.lvgl_tick_inc().unwrap();
+        cx.spawn.lvgl_task_handler().unwrap();
         cx.spawn.poll_button().unwrap();
-        cx.spawn.show_battery_status().unwrap();
-        cx.spawn.update_battery_status().unwrap();
+        //cx.spawn.show_battery_status().unwrap();
+        //cx.spawn.update_battery_status().unwrap();
 
         init::LateResources {
             lcd,
@@ -296,8 +330,10 @@ const APP: () = {
             backlight,
             button,
             button_debouncer: debounce_6(),
-            text_style,
-            ferris,
+            //text_style,
+            //ferris,
+            ui,
+            label,
 
             radio,
             ble_ll,
@@ -358,74 +394,99 @@ const APP: () = {
         }
     }
 
-    #[task(resources = [lcd, ferris, ferris_x_offset, ferris_y_offset, ferris_step_size], schedule = [write_ferris])]
-    fn write_ferris(cx: write_ferris::Context) {
-        // Draw ferris
-        Image::new(
-            &cx.resources.ferris,
-            Point::new(*cx.resources.ferris_x_offset, *cx.resources.ferris_y_offset),
-        )
-        .draw(cx.resources.lcd)
-        .unwrap();
+    #[task(resources = [ui], schedule = [lvgl_tick_inc])]
+    fn lvgl_tick_inc(cx: lvgl_tick_inc::Context) {
+        let ui: &mut UI = cx.resources.ui;
+        ui.tick_inc(core::time::Duration::from_millis(5));
 
-        // Clean up behind ferris
-        let backdrop_style = PrimitiveStyleBuilder::new()
-            .fill_color(BACKGROUND_COLOR)
-            .build();
-        let (p1, p2) = if *cx.resources.ferris_step_size > 0 {
-            // Clean up to the left
-            (
-                Point::new(
-                    *cx.resources.ferris_x_offset - *cx.resources.ferris_step_size,
-                    *cx.resources.ferris_y_offset,
-                ),
-                Point::new(
-                    *cx.resources.ferris_x_offset,
-                    *cx.resources.ferris_y_offset + (FERRIS_H as i32),
-                ),
-            )
-        } else {
-            // Clean up to the right
-            (
-                Point::new(
-                    *cx.resources.ferris_x_offset + FERRIS_W as i32,
-                    *cx.resources.ferris_y_offset,
-                ),
-                Point::new(
-                    *cx.resources.ferris_x_offset + FERRIS_W as i32
-                        - *cx.resources.ferris_step_size,
-                    *cx.resources.ferris_y_offset + (FERRIS_H as i32),
-                ),
-            )
-        };
-        Rectangle::new(p1, p2)
-            .into_styled(backdrop_style)
-            .draw(cx.resources.lcd)
-            .unwrap();
-
-        // Reset step size
-        if *cx.resources.ferris_x_offset as u16 > LCD_W - FERRIS_W - MARGIN {
-            *cx.resources.ferris_step_size = -*cx.resources.ferris_step_size;
-        } else if (*cx.resources.ferris_x_offset as u16) < MARGIN {
-            *cx.resources.ferris_step_size = -*cx.resources.ferris_step_size;
-        }
-        *cx.resources.ferris_x_offset += *cx.resources.ferris_step_size;
-
-        // Re-schedule the timer interrupt
-        cx.schedule.write_ferris(cx.scheduled + 25.hz()).unwrap();
+        cx.schedule.lvgl_tick_inc(cx.scheduled + 5.millis()).unwrap();
     }
 
-    #[task(resources = [lcd, text_style, counter], schedule = [write_counter])]
+    #[task(resources = [ui], schedule = [lvgl_task_handler])]
+    fn lvgl_task_handler(cx: lvgl_task_handler::Context) {
+        let ui: &mut UI = cx.resources.ui;
+        ui.task_handler();
+
+        cx.schedule.lvgl_task_handler(cx.scheduled + 1.millis()).unwrap();
+    }
+
+    // #[task(resources = [lcd, ferris, ferris_x_offset, ferris_y_offset, ferris_step_size], schedule = [write_ferris])]
+    // fn write_ferris(cx: write_ferris::Context) {
+    //     // Draw ferris
+    //     Image::new(
+    //         &cx.resources.ferris,
+    //         Point::new(*cx.resources.ferris_x_offset, *cx.resources.ferris_y_offset),
+    //     )
+    //     .draw(cx.resources.lcd)
+    //     .unwrap();
+
+    //     // Clean up behind ferris
+    //     let backdrop_style = PrimitiveStyleBuilder::new()
+    //         .fill_color(BACKGROUND_COLOR)
+    //         .build();
+    //     let (p1, p2) = if *cx.resources.ferris_step_size > 0 {
+    //         // Clean up to the left
+    //         (
+    //             Point::new(
+    //                 *cx.resources.ferris_x_offset - *cx.resources.ferris_step_size,
+    //                 *cx.resources.ferris_y_offset,
+    //             ),
+    //             Point::new(
+    //                 *cx.resources.ferris_x_offset,
+    //                 *cx.resources.ferris_y_offset + (FERRIS_H as i32),
+    //             ),
+    //         )
+    //     } else {
+    //         // Clean up to the right
+    //         (
+    //             Point::new(
+    //                 *cx.resources.ferris_x_offset + FERRIS_W as i32,
+    //                 *cx.resources.ferris_y_offset,
+    //             ),
+    //             Point::new(
+    //                 *cx.resources.ferris_x_offset + FERRIS_W as i32
+    //                     - *cx.resources.ferris_step_size,
+    //                 *cx.resources.ferris_y_offset + (FERRIS_H as i32),
+    //             ),
+    //         )
+    //     };
+    //     Rectangle::new(p1, p2)
+    //         .into_styled(backdrop_style)
+    //         .draw(cx.resources.lcd)
+    //         .unwrap();
+
+    //     // Reset step size
+    //     if *cx.resources.ferris_x_offset as u16 > LCD_W - FERRIS_W - MARGIN {
+    //         *cx.resources.ferris_step_size = -*cx.resources.ferris_step_size;
+    //     } else if (*cx.resources.ferris_x_offset as u16) < MARGIN {
+    //         *cx.resources.ferris_step_size = -*cx.resources.ferris_step_size;
+    //     }
+    //     *cx.resources.ferris_x_offset += *cx.resources.ferris_step_size;
+
+    //     // Re-schedule the timer interrupt
+    //     cx.schedule.write_ferris(cx.scheduled + 25.hz()).unwrap();
+    // }
+
+    //#[task(resources = [lcd, text_style, counter], schedule = [write_counter])]
+    #[task(resources = [ui, label, counter], schedule = [write_counter])]
     fn write_counter(cx: write_counter::Context) {
         rprintln!("Counter is {}", cx.resources.counter);
 
         // Write counter to the display
         let mut buf = [0u8; 20];
         let text = cx.resources.counter.numtoa_str(10, &mut buf);
-        Text::new(text, Point::new(10, LCD_H as i32 - 10 - 16))
-            .into_styled(cx.resources.text_style.build())
-            .draw(cx.resources.lcd)
-            .unwrap();
+        // Text::new(text, Point::new(10, LCD_H as i32 - 10 - 16))
+        //     .into_styled(cx.resources.text_style.build())
+        //     .draw(cx.resources.lcd)
+        //     .unwrap();
+
+        let ui: &mut UI = cx.resources.ui;
+        let mut scrn  = ui.scr_act().unwrap();
+        let counter: &mut lvgl::widgets::Label = cx.resources.label;
+        counter.set_size(200, 40).unwrap();
+        counter.set_label_align(LabelAlign::Center).unwrap();
+        counter.set_align(&mut scrn, Align::InTopRight, 0, 0).unwrap();
+        counter.set_text(text).unwrap();
 
         // Increment counter
         *cx.resources.counter += 1;
@@ -459,52 +520,52 @@ const APP: () = {
         }
     }
 
-    /// Fetch the battery status from the hardware. Update the text if
-    /// something changed.
-    #[task(resources = [battery], spawn = [show_battery_status], schedule = [update_battery_status])]
-    fn update_battery_status(cx: update_battery_status::Context) {
-        rprintln!("Update battery status");
+    // /// Fetch the battery status from the hardware. Update the text if
+    // /// something changed.
+    // #[task(resources = [battery], spawn = [show_battery_status], schedule = [update_battery_status])]
+    // fn update_battery_status(cx: update_battery_status::Context) {
+    //     rprintln!("Update battery status");
+    //
+    //     let changed = cx.resources.battery.update();
+    //     if changed {
+    //         rprintln!("Battery status changed");
+    //         cx.spawn.show_battery_status().unwrap();
+    //     }
+    //
+    //     // Re-schedule the timer interrupt in 1s
+    //     cx.schedule
+    //         .update_battery_status(cx.scheduled + 1.secs())
+    //         .unwrap();
+    // }
 
-        let changed = cx.resources.battery.update();
-        if changed {
-            rprintln!("Battery status changed");
-            cx.spawn.show_battery_status().unwrap();
-        }
-
-        // Re-schedule the timer interrupt in 1s
-        cx.schedule
-            .update_battery_status(cx.scheduled + 1.secs())
-            .unwrap();
-    }
-
-    /// Show the battery status on the LCD.
-    #[task(resources = [battery, lcd, text_style])]
-    fn show_battery_status(cx: show_battery_status::Context) {
-        let voltage = cx.resources.battery.voltage();
-        let charging = cx.resources.battery.is_charging();
-
-        rprintln!(
-            "Battery status: {} ({})",
-            voltage,
-            if charging { "charging" } else { "discharging" },
-        );
-
-        // Show battery status in top right corner
-        let mut buf = [0u8; 6];
-        (voltage / 10).numtoa(10, &mut buf[0..1]);
-        buf[1] = b'.';
-        (voltage % 10).numtoa(10, &mut buf[2..3]);
-        buf[3] = b'V';
-        buf[4] = b'/';
-        buf[5] = if charging { b'C' } else { b'D' };
-        let status = core::str::from_utf8(&buf).unwrap();
-        let text = Text::new(status, Point::zero()).into_styled(cx.resources.text_style.build());
-        let translation = Point::new(
-            LCD_W as i32 - text.size().width as i32 - MARGIN as i32,
-            MARGIN as i32,
-        );
-        text.translate(translation).draw(cx.resources.lcd).unwrap();
-    }
+    // /// Show the battery status on the LCD.
+    // #[task(resources = [battery, lcd, text_style])]
+    // fn show_battery_status(cx: show_battery_status::Context) {
+    //     let voltage = cx.resources.battery.voltage();
+    //     let charging = cx.resources.battery.is_charging();
+    //
+    //     rprintln!(
+    //         "Battery status: {} ({})",
+    //         voltage,
+    //         if charging { "charging" } else { "discharging" },
+    //     );
+    //
+    //     // Show battery status in top right corner
+    //     let mut buf = [0u8; 6];
+    //     (voltage / 10).numtoa(10, &mut buf[0..1]);
+    //     buf[1] = b'.';
+    //     (voltage % 10).numtoa(10, &mut buf[2..3]);
+    //     buf[3] = b'V';
+    //     buf[4] = b'/';
+    //     buf[5] = if charging { b'C' } else { b'D' };
+    //     let status = core::str::from_utf8(&buf).unwrap();
+    //     let text = Text::new(status, Point::zero()).into_styled(cx.resources.text_style.build());
+    //     let translation = Point::new(
+    //         LCD_W as i32 - text.size().width as i32 - MARGIN as i32,
+    //         MARGIN as i32,
+    //     );
+    //     text.translate(translation).draw(cx.resources.lcd).unwrap();
+    // }
 
     // Provide unused interrupts to RTFM for its scheduling
     extern "C" {
