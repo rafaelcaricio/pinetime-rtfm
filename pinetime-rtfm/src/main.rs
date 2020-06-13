@@ -15,7 +15,7 @@ use cortex_m::asm;
 use debouncr::{debounce_6, Debouncer, Edge, Repeat6};
 use embedded_graphics::prelude::*;
 use lvgl::{DisplayDriver, UI, Align, Widget, Part, State, Color};
-use lvgl::widgets::{Label, LabelAlign};
+use lvgl::widgets::{Label, LabelAlign, Spinner};
 use lvgl::style::Style as LvStyle;
 use embedded_graphics::{
     fonts::{Font12x16, Text},
@@ -278,10 +278,13 @@ const APP: () = {
         screen_style.set_bg_color(State::DEFAULT, Color::from_rgb((0, 50, 140)));
         scr.add_style(Part::Main, screen_style).unwrap();
 
+        let mut spinner = Spinner::new(&mut scr).unwrap();
+        spinner.set_size(100, 100).unwrap();
+        spinner.set_align(&mut scr, Align::Center, 0, 0);
 
         let mut label = Label::new(&mut scr).unwrap();
-        label.set_text("Initializing...").unwrap();
-        label.set_align(&mut scr, Align::Center, 0, 0).unwrap();
+        label.set_text("0").unwrap();
+        label.set_align(&mut spinner, Align::OutTopMid, 0, -15).unwrap();
         label.set_label_align(LabelAlign::Center).unwrap();
 
         let mut counter_style = LvStyle::default();
@@ -308,16 +311,9 @@ const APP: () = {
         //     .draw(&mut lcd)
         //     .unwrap();
 
-        // Load ferris image data
-        // let ferris = ImageRawLE::new(
-        //     include_bytes!("../ferris.raw"),
-        //     FERRIS_W as u32,
-        //     FERRIS_H as u32,
-        // );
 
         // Schedule tasks immediately
         cx.spawn.write_counter().unwrap();
-        //cx.spawn.write_ferris().unwrap();
         cx.spawn.lvgl_tick_inc().unwrap();
         cx.spawn.lvgl_task_handler().unwrap();
         cx.spawn.poll_button().unwrap();
@@ -410,64 +406,6 @@ const APP: () = {
         cx.schedule.lvgl_task_handler(cx.scheduled + 1.millis()).unwrap();
     }
 
-    // #[task(resources = [lcd, ferris, ferris_x_offset, ferris_y_offset, ferris_step_size], schedule = [write_ferris])]
-    // fn write_ferris(cx: write_ferris::Context) {
-    //     // Draw ferris
-    //     Image::new(
-    //         &cx.resources.ferris,
-    //         Point::new(*cx.resources.ferris_x_offset, *cx.resources.ferris_y_offset),
-    //     )
-    //     .draw(cx.resources.lcd)
-    //     .unwrap();
-
-    //     // Clean up behind ferris
-    //     let backdrop_style = PrimitiveStyleBuilder::new()
-    //         .fill_color(BACKGROUND_COLOR)
-    //         .build();
-    //     let (p1, p2) = if *cx.resources.ferris_step_size > 0 {
-    //         // Clean up to the left
-    //         (
-    //             Point::new(
-    //                 *cx.resources.ferris_x_offset - *cx.resources.ferris_step_size,
-    //                 *cx.resources.ferris_y_offset,
-    //             ),
-    //             Point::new(
-    //                 *cx.resources.ferris_x_offset,
-    //                 *cx.resources.ferris_y_offset + (FERRIS_H as i32),
-    //             ),
-    //         )
-    //     } else {
-    //         // Clean up to the right
-    //         (
-    //             Point::new(
-    //                 *cx.resources.ferris_x_offset + FERRIS_W as i32,
-    //                 *cx.resources.ferris_y_offset,
-    //             ),
-    //             Point::new(
-    //                 *cx.resources.ferris_x_offset + FERRIS_W as i32
-    //                     - *cx.resources.ferris_step_size,
-    //                 *cx.resources.ferris_y_offset + (FERRIS_H as i32),
-    //             ),
-    //         )
-    //     };
-    //     Rectangle::new(p1, p2)
-    //         .into_styled(backdrop_style)
-    //         .draw(cx.resources.lcd)
-    //         .unwrap();
-
-    //     // Reset step size
-    //     if *cx.resources.ferris_x_offset as u16 > LCD_W - FERRIS_W - MARGIN {
-    //         *cx.resources.ferris_step_size = -*cx.resources.ferris_step_size;
-    //     } else if (*cx.resources.ferris_x_offset as u16) < MARGIN {
-    //         *cx.resources.ferris_step_size = -*cx.resources.ferris_step_size;
-    //     }
-    //     *cx.resources.ferris_x_offset += *cx.resources.ferris_step_size;
-
-    //     // Re-schedule the timer interrupt
-    //     cx.schedule.write_ferris(cx.scheduled + 25.hz()).unwrap();
-    // }
-
-    //#[task(resources = [lcd, text_style, counter], schedule = [write_counter])]
     #[task(resources = [ui, label, counter], schedule = [write_counter])]
     fn write_counter(cx: write_counter::Context) {
         rprintln!("Counter is {}", cx.resources.counter);
@@ -475,17 +413,10 @@ const APP: () = {
         // Write counter to the display
         let mut buf = [0u8; 20];
         let text = cx.resources.counter.numtoa_str(10, &mut buf);
-        // Text::new(text, Point::new(10, LCD_H as i32 - 10 - 16))
-        //     .into_styled(cx.resources.text_style.build())
-        //     .draw(cx.resources.lcd)
-        //     .unwrap();
 
         let ui: &mut UI = cx.resources.ui;
         let mut scrn  = ui.scr_act().unwrap();
         let counter: &mut lvgl::widgets::Label = cx.resources.label;
-        counter.set_size(200, 40).unwrap();
-        counter.set_label_align(LabelAlign::Center).unwrap();
-        counter.set_align(&mut scrn, Align::InTopRight, 0, 0).unwrap();
         counter.set_text(text).unwrap();
 
         // Increment counter
