@@ -45,7 +45,8 @@
                 //"break main",                   //  Break at main()
                 "break __assert_func",          //  Break for any assert failures
                 "break os_default_irq",         //  Break for any unhandled interrupts
-                "break HardFault"
+                "break HardFault",
+                "break rust_begin_unwind"
             ]
         },
         {
@@ -63,13 +64,26 @@
             "request": "launch",
             "type": "cortex-debug",
             "servertype": "openocd",
+            // "swoConfig": {
+            //     "enabled": true,
+            //     "cpuFrequency": 16000000,
+            //     "swoFrequency": 2000000,
+            //     "source": "probe",
+            //     "decoders": [
+            //         {
+            //             "type": "console",
+            //             "label": "ITM",
+            //             "port": 0
+            //         }
+            //     ]
+            // },
             "preLaunchCommands": [
                 //  Before loading the Application, run these gdb commands.
                 //  Set timeout for executing openocd commands.
                 "set remotetimeout 60",
 
                 //  This indicates that an unrecognized breakpoint location should automatically result in a pending breakpoint being created.
-                "set breakpoint pending on"
+                "set breakpoint pending on",
             
                 //  Display the Arm instruction when hitting breakpoint.
                 //  "display/i $pc",
@@ -79,6 +93,9 @@
 
                 //  Restore Application symbols.
                 //  "symbol-file bin/targets/bluepill_my_sensor/app/apps/my_sensor_app/my_sensor_app.elf",
+                "set print asm-demangle on",
+                "monitor semihosting ioclient 3",
+                "monitor arm semihosting enable"
             ],
             "postLaunchCommands": [
                 //  After loading the Application, run these gdb commands.  The Application ELF image does not contain a valid Image Header.

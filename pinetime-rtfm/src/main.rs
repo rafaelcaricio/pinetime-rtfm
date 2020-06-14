@@ -53,7 +53,7 @@ use monotonic_nrf52::U32Ext;
 #[global_allocator]
 static ALLOCATOR: CortexMHeap = CortexMHeap::empty();
 
-const HEAP_SIZE: usize = 2 * 1024; // in bytes
+const HEAP_SIZE: usize = 32 * 1024; // in bytes
 
 const LCD_W: u16 = 240;
 const LCD_H: u16 = 240;
@@ -93,21 +93,9 @@ const APP: () = {
         button: Pin<Input<Floating>>,
         button_debouncer: Debouncer<u8, Repeat6>,
 
-        // // Styles
-        // text_style: TextStyleBuilder<Rgb565, Font12x16>,
-
         // Counter resources
         #[init(0)]
         counter: usize,
-
-        // // Ferris resources
-        // ferris: ImageRawLE<'static, Rgb565>,
-        // #[init(10)]
-        // ferris_x_offset: i32,
-        // #[init(80)]
-        // ferris_y_offset: i32,
-        // #[init(2)]
-        // ferris_step_size: i32,
 
         // LVGL GUI
         ui: UI,
@@ -280,36 +268,23 @@ const APP: () = {
 
         let mut spinner = Spinner::new(&mut scr).unwrap();
         spinner.set_size(100, 100).unwrap();
-        spinner.set_align(&mut scr, Align::Center, 0, 0);
+        spinner.set_align(&mut scr, Align::Center, 0, 0).unwrap();
 
         let mut label = Label::new(&mut scr).unwrap();
-        label.set_text("0").unwrap();
+        label.set_text("0000").unwrap();
         label.set_align(&mut spinner, Align::OutTopMid, 0, -15).unwrap();
-        label.set_label_align(LabelAlign::Center).unwrap();
 
         let mut counter_style = LvStyle::default();
         counter_style.set_text_color(State::DEFAULT, Color::from_rgb((255, 255, 255)));
         label.add_style(Part::Main, counter_style).unwrap();
 
-        // Draw something onto the LCD
-        let backdrop_style = PrimitiveStyleBuilder::new()
-            .fill_color(BACKGROUND_COLOR)
-            .build();
-        Rectangle::new(Point::new(0, 0), Point::new(LCD_W as i32, LCD_H as i32))
-            .into_styled(backdrop_style)
-            .draw(&mut lcd)
-            .unwrap();
+        let mut device_label_style = LvStyle::default();
+        device_label_style.set_text_color(State::DEFAULT, Color::from_rgb((255, 255, 255)));
 
-        // // Choose text style
-        // let text_style = TextStyleBuilder::new(Font12x16)
-        //     .text_color(Rgb565::WHITE)
-        //     .background_color(BACKGROUND_COLOR);
-
-        // // Draw text
-        // Text::new("PineTime", Point::new(10, 10))
-        //     .into_styled(text_style.build())
-        //     .draw(&mut lcd)
-        //     .unwrap();
+        let mut device_label = Label::new(&mut scr).unwrap();
+        device_label.set_text("Pinetime").unwrap();
+        device_label.add_style(Part::Main, device_label_style).unwrap();
+        device_label.set_align(&mut scr, Align::InTopRight, 0, 0).unwrap();
 
 
         // Schedule tasks immediately
@@ -406,18 +381,15 @@ const APP: () = {
         cx.schedule.lvgl_task_handler(cx.scheduled + 1.millis()).unwrap();
     }
 
-    #[task(resources = [ui, label, counter], schedule = [write_counter])]
+    #[task(resources = [label, counter], schedule = [write_counter])]
     fn write_counter(cx: write_counter::Context) {
         rprintln!("Counter is {}", cx.resources.counter);
 
         // Write counter to the display
-        let mut buf = [0u8; 20];
-        let text = cx.resources.counter.numtoa_str(10, &mut buf);
+        let text = format!("{:04}", cx.resources.counter);
 
-        let ui: &mut UI = cx.resources.ui;
-        let mut scrn  = ui.scr_act().unwrap();
         let counter: &mut lvgl::widgets::Label = cx.resources.label;
-        counter.set_text(text).unwrap();
+        counter.set_text(&text).unwrap();
 
         // Increment counter
         *cx.resources.counter += 1;

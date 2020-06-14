@@ -3,6 +3,7 @@ name = "pinetime-rtfm"
 version = "0.1.0"
 authors = ["Danilo Bargen <mail@dbrgn.ch>"]
 edition = "2018"
+build = "build.rs"
 
 [dependencies]
 cortex-m = "0.6"
@@ -19,12 +20,14 @@ rubble = { git = "https://github.com/jonas-schievink/rubble" }
 rubble-nrf5x = { git = "https://github.com/jonas-schievink/rubble", features = ["52832"], default-features = false }
 st7789 = { version = "0.2", features = ["graphics", "batch", "buffer"], default-features = false }
 alloc-cortex-m = "0.4.0"
+#lvgl = "0.3.1"
 lvgl = { path = "../../lvgl-rs/lvgl" }
 
 [profile.dev]
 codegen-units = 1
 
 [profile.release]
+incremental = false # disable incremental build to allow lto on nightly
 lto = true
 debug = true
 codegen-units = 1
