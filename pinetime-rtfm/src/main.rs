@@ -1,20 +1,13 @@
 #![no_main]
 #![no_std]
-#![feature(alloc_error_handler)]
-
-#[macro_use]
-extern crate alloc;
 
 // Panic handler
 #[cfg(not(test))]
 use panic_rtt_target as _;
 
-use alloc_cortex_m::CortexMHeap;
-use core::alloc::Layout;
-use cortex_m::asm;
 use debouncr::{debounce_6, Debouncer, Edge, Repeat6};
 use embedded_graphics::prelude::*;
-use lvgl::{DisplayDriver, UI, Align, Widget, Part, State, Color};
+use lvgl::{UI, Align, Widget, Part, State, Color};
 use lvgl::widgets::{Label, LabelAlign, Spinner};
 use lvgl::style::Style as LvStyle;
 use embedded_graphics::{
@@ -50,11 +43,6 @@ mod monotonic_nrf52;
 
 use monotonic_nrf52::U32Ext;
 
-#[global_allocator]
-static ALLOCATOR: CortexMHeap = CortexMHeap::empty();
-
-const HEAP_SIZE: usize = 32 * 1024; // in bytes
-
 const LCD_W: u16 = 240;
 const LCD_H: u16 = 240;
 
@@ -78,12 +66,12 @@ impl Config for AppConfig {
 const APP: () = {
     struct Resources {
         // LCD
-        lcd: st7789::ST7789<
-            hal::spim::Spim<pac::SPIM1>,
-            p0::P0_18<Output<PushPull>>,
-            p0::P0_26<Output<PushPull>>,
-            delay::TimerDelay,
-        >,
+        // lcd: st7789::ST7789<
+        //     hal::spim::Spim<pac::SPIM1>,
+        //     p0::P0_18<Output<PushPull>>,
+        //     p0::P0_26<Output<PushPull>>,
+        //     delay::TimerDelay,
+        // >,
         backlight: backlight::Backlight,
 
         // Battery
@@ -98,8 +86,16 @@ const APP: () = {
         counter: usize,
 
         // LVGL GUI
-        ui: UI,
+        ui: UI<
+            st7789::ST7789<
+                hal::spim::Spim<pac::SPIM1>,
+                p0::P0_18<Output<PushPull>>,
+                p0::P0_26<Output<PushPull>>,
+                delay::TimerDelay,
+            >,
+            Rgb565>,
         label: Label,
+        batt_label: Label,
 
         // BLE
         #[init([0; MIN_PDU_BUF])]
@@ -118,7 +114,7 @@ const APP: () = {
     #[init(
         resources = [ble_tx_buf, ble_rx_buf, tx_queue, rx_queue],
         // spawn = [write_counter, write_ferris, poll_button, show_battery_status, update_battery_status],
-        spawn = [write_counter, poll_button, lvgl_tick_inc, lvgl_task_handler],
+        spawn = [write_counter, poll_button, lvgl_tick_inc, lvgl_task_handler, show_battery_status, update_battery_status],
     )]
     fn init(cx: init::Context) -> init::LateResources {
         // Destructure device peripherals
@@ -252,13 +248,9 @@ const APP: () = {
         lcd.init().unwrap();
         lcd.set_orientation(&Orientation::Portrait).unwrap();
 
-        // Initialize the allocator
-        unsafe { ALLOCATOR.init(cortex_m_rt::heap_start() as usize, HEAP_SIZE) }
-
         let mut ui = UI::init().unwrap();
 
-        let display_driver = DisplayDriver::new(&mut lcd);
-        ui.disp_drv_register(display_driver);
+        ui.disp_drv_register(lcd);
 
         let mut scr = ui.scr_act().unwrap();
         
@@ -271,7 +263,7 @@ const APP: () = {
         spinner.set_align(&mut scr, Align::Center, 0, 0).unwrap();
 
         let mut label = Label::new(&mut scr).unwrap();
-        label.set_text("0000").unwrap();
+        label.set_text(cstr_core::CStr::from_bytes_with_nul("It's alive!\0".as_bytes()).unwrap()).unwrap();
         label.set_align(&mut spinner, Align::OutTopMid, 0, -15).unwrap();
 
         let mut counter_style = LvStyle::default();
@@ -282,9 +274,17 @@ const APP: () = {
         device_label_style.set_text_color(State::DEFAULT, Color::from_rgb((255, 255, 255)));
 
         let mut device_label = Label::new(&mut scr).unwrap();
-        device_label.set_text("Pinetime").unwrap();
+        device_label.set_text(cstr_core::CStr::from_bytes_with_nul("Pinetime\0".as_bytes()).unwrap()).unwrap();
         device_label.add_style(Part::Main, device_label_style).unwrap();
-        device_label.set_align(&mut scr, Align::InTopRight, 0, 0).unwrap();
+        device_label.set_align(&mut scr, Align::InTopLeft, 0, 0).unwrap();
+
+        let mut batt_label_style = LvStyle::default();
+        batt_label_style.set_text_color(State::DEFAULT, Color::from_rgb((255, 255, 255)));
+
+        let mut batt_label = Label::new(&mut scr).unwrap();
+        batt_label.set_text(cstr_core::CStr::from_bytes_with_nul("Bat LVL\0".as_bytes()).unwrap()).unwrap();
+        batt_label.add_style(Part::Main, batt_label_style).unwrap();
+        batt_label.set_align(&mut scr, Align::InTopRight, 0, 0).unwrap();
 
 
         // Schedule tasks immediately
@@ -292,11 +292,10 @@ const APP: () = {
         cx.spawn.lvgl_tick_inc().unwrap();
         cx.spawn.lvgl_task_handler().unwrap();
         cx.spawn.poll_button().unwrap();
-        //cx.spawn.show_battery_status().unwrap();
-        //cx.spawn.update_battery_status().unwrap();
+        cx.spawn.show_battery_status().unwrap();
+        cx.spawn.update_battery_status().unwrap();
 
         init::LateResources {
-            lcd,
             battery,
             backlight,
             button,
@@ -305,6 +304,7 @@ const APP: () = {
             //ferris,
             ui,
             label,
+            batt_label,
 
             radio,
             ble_ll,
@@ -367,7 +367,7 @@ const APP: () = {
 
     #[task(resources = [ui], schedule = [lvgl_tick_inc])]
     fn lvgl_tick_inc(cx: lvgl_tick_inc::Context) {
-        let ui: &mut UI = cx.resources.ui;
+        let ui = cx.resources.ui;
         ui.tick_inc(core::time::Duration::from_millis(5));
 
         cx.schedule.lvgl_tick_inc(cx.scheduled + 5.millis()).unwrap();
@@ -375,7 +375,7 @@ const APP: () = {
 
     #[task(resources = [ui], schedule = [lvgl_task_handler])]
     fn lvgl_task_handler(cx: lvgl_task_handler::Context) {
-        let ui: &mut UI = cx.resources.ui;
+        let ui = cx.resources.ui;
         ui.task_handler();
 
         cx.schedule.lvgl_task_handler(cx.scheduled + 1.millis()).unwrap();
@@ -386,10 +386,11 @@ const APP: () = {
         rprintln!("Counter is {}", cx.resources.counter);
 
         // Write counter to the display
-        let text = format!("{:04}", cx.resources.counter);
+        // let mut buf = [0u8; 20];
+        // let text = cx.resources.counter.numtoa_str(10, &mut buf);
 
-        let counter: &mut lvgl::widgets::Label = cx.resources.label;
-        counter.set_text(&text).unwrap();
+        // let counter: &mut lvgl::widgets::Label = cx.resources.label;
+        // counter.set_text(cstr_core::CStr::from_bytes_with_nul(text.as_bytes()).unwrap()).unwrap();
 
         // Increment counter
         *cx.resources.counter += 1;
@@ -423,52 +424,50 @@ const APP: () = {
         }
     }
 
-    // /// Fetch the battery status from the hardware. Update the text if
-    // /// something changed.
-    // #[task(resources = [battery], spawn = [show_battery_status], schedule = [update_battery_status])]
-    // fn update_battery_status(cx: update_battery_status::Context) {
-    //     rprintln!("Update battery status");
-    //
-    //     let changed = cx.resources.battery.update();
-    //     if changed {
-    //         rprintln!("Battery status changed");
-    //         cx.spawn.show_battery_status().unwrap();
-    //     }
-    //
-    //     // Re-schedule the timer interrupt in 1s
-    //     cx.schedule
-    //         .update_battery_status(cx.scheduled + 1.secs())
-    //         .unwrap();
-    // }
+    /// Fetch the battery status from the hardware. Update the text if
+    /// something changed.
+    #[task(resources = [batt_label, battery], spawn = [show_battery_status], schedule = [update_battery_status])]
+    fn update_battery_status(cx: update_battery_status::Context) {
+        rprintln!("Update battery status");
+    
+        let changed = cx.resources.battery.update();
+        if changed {
+            rprintln!("Battery status changed");
+            cx.spawn.show_battery_status().unwrap();
+        }
+    
+        // Re-schedule the timer interrupt in 1s
+        cx.schedule
+            .update_battery_status(cx.scheduled + 1.secs())
+            .unwrap();
+    }
 
-    // /// Show the battery status on the LCD.
-    // #[task(resources = [battery, lcd, text_style])]
-    // fn show_battery_status(cx: show_battery_status::Context) {
-    //     let voltage = cx.resources.battery.voltage();
-    //     let charging = cx.resources.battery.is_charging();
-    //
-    //     rprintln!(
-    //         "Battery status: {} ({})",
-    //         voltage,
-    //         if charging { "charging" } else { "discharging" },
-    //     );
-    //
-    //     // Show battery status in top right corner
-    //     let mut buf = [0u8; 6];
-    //     (voltage / 10).numtoa(10, &mut buf[0..1]);
-    //     buf[1] = b'.';
-    //     (voltage % 10).numtoa(10, &mut buf[2..3]);
-    //     buf[3] = b'V';
-    //     buf[4] = b'/';
-    //     buf[5] = if charging { b'C' } else { b'D' };
-    //     let status = core::str::from_utf8(&buf).unwrap();
-    //     let text = Text::new(status, Point::zero()).into_styled(cx.resources.text_style.build());
-    //     let translation = Point::new(
-    //         LCD_W as i32 - text.size().width as i32 - MARGIN as i32,
-    //         MARGIN as i32,
-    //     );
-    //     text.translate(translation).draw(cx.resources.lcd).unwrap();
-    // }
+    /// Show the battery status on the LCD.
+    #[task(resources = [batt_label, battery])]
+    fn show_battery_status(cx: show_battery_status::Context) {
+        let voltage = cx.resources.battery.voltage();
+        let charging = cx.resources.battery.is_charging();
+    
+        rprintln!(
+            "Battery status: {} ({})",
+            voltage,
+            if charging { "charging" } else { "discharging" },
+        );
+    
+        // Show battery status in top right corner
+        let mut buf = [0u8; 7];
+        (voltage / 10).numtoa(10, &mut buf[0..1]);
+        buf[1] = b'.';
+        (voltage % 10).numtoa(10, &mut buf[2..3]);
+        buf[3] = b'V';
+        buf[4] = b'/';
+        buf[5] = if charging { b'C' } else { b'D' };
+        buf[6] = b'\0';
+        //let status = core::str::from_utf8(&buf).unwrap();
+        unsafe {
+            cx.resources.batt_label.set_text(cstr_core::CStr::from_bytes_with_nul_unchecked(&buf)).unwrap();
+        };
+    }
 
     // Provide unused interrupts to RTFM for its scheduling
     extern "C" {
@@ -480,11 +479,3 @@ const APP: () = {
         fn SWI5_EGU5();
     }
 };
-
-#[alloc_error_handler]
-fn alloc_error(_layout: Layout) -> ! {
-    asm::bkpt();
-
-    rprintln!("OOM x(");
-    loop {}
-}

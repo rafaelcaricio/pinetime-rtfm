@@ -19,9 +19,9 @@ rtt-target = { version = "0.1", features = ["cortex-m"] }
 rubble = { git = "https://github.com/jonas-schievink/rubble" }
 rubble-nrf5x = { git = "https://github.com/jonas-schievink/rubble", features = ["52832"], default-features = false }
 st7789 = { version = "0.2", features = ["graphics", "batch", "buffer"], default-features = false }
-alloc-cortex-m = "0.4.0"
 #lvgl = "0.3.1"
 lvgl = { path = "../../lvgl-rs/lvgl" }
+cstr_core = "0.2.0"
 
 [profile.dev]
 codegen-units = 1
